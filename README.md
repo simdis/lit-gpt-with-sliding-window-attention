@@ -2,15 +2,18 @@
 
 ## 1-  Sliding Window Attention (SWA)
 This fork of lit-gpt introduces the Sliding Window Attention (SWA) as defined in the [Mistral paper](https://arxiv.org/pdf/2310.06825.pdf).
-This repository supports the model without an explicit support for the SWA.
+The original repository supports the Mistral model with some limitations due to the absence of a SWA implementation.
 
-The SWA is not introduced by adding two keywords to the config file, one boolean to enable it, and the other (optional)
+The SWA is here introduced by adding two keywords to the config file, one boolean to enable it, and the other (optional)
 integer to define the SWA size. Then the causal mask generated within lit-gpt and associated to the KV-Cache is updated
 to take into account the SWA, if any.
 Please note that the same causal mask is generated when SWA is enabled and the KV-cache not used. It is then assumed
 that such a mechanism is used in causal models only.
 
 A new set of tests have been introduced to validate the introduction of SWA.
+
+### Disclaimer
+The configuration of Mistral within this repo have not been changed to reflect the newly introduced support for SWA.
 
 ## 2- Rolling KV-Cache
 The KV-Cache of lit-gpt will always return tensors with the maximum possible size, then the cache mask will filter out 
@@ -20,7 +23,10 @@ will operate on tensors with a size equal to the sliding window's size.
 
 To do so, an extra parameter is introduced in config to enable a specific optimisation for the 
 KV cache (available only when the SWA is enabled too). This version of the KV-cache saves only the values corresponding 
-to the sliding window. 
+to the sliding window, by discarding all the (old) values no longer required, 
+effectively acting as a rolling cache.
+
+### Rolling KV-Cache implementation technical details
 
 To make the implementation easier, defined as *S* the size of the sliding window, the optimised cache will have size *2S*,
 and every new value will be saved twice as follows. Defined as *p* the positional index of such new value, 
@@ -35,9 +41,6 @@ or the cache memory requirements that will still be
 *O(block_size^2)* and O(block_size), respectively, 
 but it will change the constant factors associated. As an example, in the case of the Mistral, block size is 32 times the 
 sliding window size, and this implementation will introduce an improvement factor of 16.
-
-### Disclaimer
-The configuration of Mistral have not been changed to reflect the newly introduced support for SWA.
 
 
 # Original README.md
