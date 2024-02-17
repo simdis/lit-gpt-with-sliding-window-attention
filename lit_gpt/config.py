@@ -1,6 +1,7 @@
 # Copyright Lightning AI. Licensed under the Apache License 2.0, see LICENSE file.
 
 import json
+import warnings
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +61,9 @@ class Config:
     n_expert: int = 0
     n_expert_per_token: int = 0
 
+    use_sliding_window: bool = False
+    sliding_window_size: Optional[int] = None
+
     def __post_init__(self):
         if not self.name:
             self.name = self.hf_config.get("name", self.name)
@@ -87,6 +91,16 @@ class Config:
             self.intermediate_size = 4 * self.n_embd
 
         self.rope_n_elem = int(self.rotary_percentage * self.head_size)
+
+        # Set default sliding window
+        if not self.use_sliding_window and self.sliding_window_size is not None:
+            warnings.warn(f"Sliding window size set without enabling it. "
+                          f"use_sliding_window {self.use_sliding_window} "
+                          f"sliding_window_size {self.sliding_window_size}")
+        if self.use_sliding_window:
+            if self.sliding_window_size is None:
+                # Default to block size
+                self.sliding_window_size = self.block_size
 
     @classmethod
     def from_name(cls, name: str, **kwargs: Any) -> Self:

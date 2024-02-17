@@ -85,6 +85,13 @@ class GPT(nn.Module):
             cos = self.cos[:T]
             sin = self.sin[:T]
             mask = None
+            # Create mask for SWA, if in use
+            # Please note that this assumes that the model is causal.
+            if self.config.use_sliding_window:
+                mask = build_mask_cache(
+                    max_seq_length=T,
+                    window_size=self.config.sliding_window_size
+                )
 
         x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
         for block in self.transformer.h:
@@ -125,7 +132,18 @@ class GPT(nn.Module):
         if self.mask_cache is None or self.mask_cache.size(3) != max_seq_length:
             # passing `attn_mask` to SDPA disables the flash implementation. since we only need the mask
             # for the kv-cache support (only during inference), we only create it in that situation
-            self.mask_cache = build_mask_cache(max_seq_length, device)
+            # The behaviour is different if SWA is present
+            if self.config.use_sliding_window:
+                self.mask_cache = build_mask_cache(
+                    max_seq_length=max_seq_length,
+                    device=device,
+                    window_size=self.config.sliding_window_size
+                )
+            else:
+                self.mask_cache = build_mask_cache(
+                    max_seq_length=max_seq_length,
+                    device=device
+                )
 
     def clear_kv_cache(self) -> None:
         self.mask_cache = None
@@ -373,6 +391,17 @@ class KVCache(nn.Module):
         torch.nn.init.zeros_(self.v)
 
 
-def build_mask_cache(max_seq_length: int, device: Optional[torch.device] = None) -> torch.Tensor:
-    ones = torch.ones((max_seq_length, max_seq_length), device=device, dtype=torch.bool)
-    return torch.tril(ones).unsqueeze(0).unsqueeze(0)
+def build_mask_cache(
+        max_seq_length: int,
+        device: Optional[torch.device] = None,
+        window_size: Optional[int] = None
+) -> torch.Tensor:
+    # Base case
+    mask = torch.ones((max_seq_length, max_seq_length), device=device, dtype=torch.bool)
+    # Remove upper right to preserve causality
+    mask = torch.tril(mask)
+    if window_size is not None and window_size < max_seq_length:
+        # Remove all the lower diagonal part after window_size - 1 diagonals.
+        mask = torch.triu(mask, diagonal=-window_size + 1)
+
+    return mask.unsqueeze(0).unsqueeze(0)  # Add extra dimensions to make the mask 4D

@@ -1,3 +1,19 @@
+# Features of this lit-gpt fork
+
+## 1-  Sliding Window Attention (SWA)
+This fork of lit-gpt introduces the Sliding Window Attention (SWA) as defined in the [Mistral paper](https://arxiv.org/pdf/2310.06825.pdf).
+This repository supports the model without an explicit support for the SWA.
+
+The SWA is not introduced by adding two keywords to the config file, one boolean to enable it, and the other (optional)
+integer to define the SWA size. Then the causal mask generated within lit-gpt and associated to the KV-Cache is updated
+to take into account the SWA, if any.
+Please note that the same causal mask is generated when SWA is enabled and the KV-cache not used. It is then assumed
+that such a mechanism is used in causal models only.
+
+A new set of tests have been introduced to validate the introduction of SWA.
+
+# Original README.md
+
 <div align="center">
 <img src="https://pl-public-data.s3.amazonaws.com/assets_lightning/LitStableLM_Badge.png" alt="Lit-GPT" width="128"/>
 
