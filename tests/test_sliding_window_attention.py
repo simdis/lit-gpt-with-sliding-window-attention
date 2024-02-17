@@ -40,32 +40,47 @@ def test_sliding_window_parameter_in_config():
 
 
 @pytest.mark.parametrize(
-    ("max_seq_length", "window_size", "expected_output"),
+    ("max_seq_length", "window_size", "cache_opt", "expected_output"),
     [
-        (5, None,
-            torch.Tensor([[[[True, False, False, False, False],
+        (5, None, False,
+         torch.Tensor([[[[True, False, False, False, False],
                          [True, True, False, False, False],
                          [True, True, True, False, False],
                          [True, True, True, True, False],
                          [True, True, True, True, True]]]])
-        ),  # base case
-        (5, 3,
-            torch.Tensor([[[[True, False, False, False, False],
+         ),  # base case
+        (5, 3, False,
+         torch.Tensor([[[[True, False, False, False, False],
                          [True, True, False, False, False],
                          [True, True, True, False, False],
                          [False, True, True, True, False],
                          [False, False, True, True, True]]]])
-        ),  # use of sliding window
-    ]
+         ),  # use of sliding window
+        (12, 3, True,
+         torch.Tensor([[[[True, False, False, False, False, False],
+                         [True, True, False, False, False, False],
+                         [True, True, True, False, False, False],
+                         [False, True, True, True, False, False],
+                         [False, False, True, True, True, False],
+                         [False, False, False, True, True, True],
+                         [False, True, True, True, False, False],
+                         [False, False, True, True, True, False],
+                         [False, False, False, True, True, True],
+                         [False, True, True, True, False, False],
+                         [False, False, True, True, True, False],
+                         [False, False, False, True, True, True]]]])
+         )  # use of sliding window
+    ],
 )
 def test_causal_mask_generation(
-        max_seq_length, window_size, expected_output
+        max_seq_length, window_size, cache_opt, expected_output
 ):
     from lit_gpt.model import build_mask_cache
 
     mask = build_mask_cache(
         max_seq_length=max_seq_length,
-        window_size=window_size
+        window_size=window_size,
+        optimise_cache_size=cache_opt
     )
     torch.testing.assert_close(mask, expected_output, check_dtype=False)
 
@@ -88,18 +103,23 @@ def test_causal_mask_generation(
     ],
 )
 @pytest.mark.parametrize(
-    ("block_size", "use_sliding_window", "window_size"),
-    [
-        (32, False, None),  # basic check that the changes did not break the original behaviour.
-        (32, True, 32),  # window size equal to block and embedding size (no window size)
-        # (64, True, 32),  # block size of size n_embed*n_layer with window_size=n_embed (default mistral)
-        # (32, True, 16),  # window size < n_embed (extra case)
-        # Note that the latter two tests have been temporarily disabled since HF version of Mistral with SPDA
+    ("block_size", "use_sliding_window", "window_size", "opt_cache"),
+   [
+       (32, False, None, None),  # basic check that the changes did not break the original behaviour.
+       (32, True, 32, None),  # window size equal to block and embedding size (no window size)
+       # (64, True, 32, None),  # block size of size n_embed*n_layer with window_size=n_embed (default mistral)
+       # (32, True, 16, None),  # window size < n_embed (extra case)
+       # (64, True, 32, True),  # introducing optimised cache (here with same length as original one)
+       # (64, True, 16, True),  # try introducing optimised cache with size smaller than block size
+       # (256, True, 16, True),  # as above with bigger block size
+       # (256, True, 4, True),  # as above with smaller window size
+
+        # Note that the commented-out tests have been temporarily disabled since HF version of Mistral with SPDA
         # does not support SWA (that is the default for CPU).
         # todo: find a way to enable the two tests above conditionally on cpu/gpu.
-    ]
+   ]
 )
-def test_against_hf_mistral(device, dtype, block_size, use_sliding_window, window_size):
+def test_against_hf_mistral(device, dtype, block_size, use_sliding_window, window_size, opt_cache):
     from transformers.models.mistral.configuration_mistral import MistralConfig
     from transformers.models.mistral.modeling_mistral import MistralForCausalLM
 
@@ -118,7 +138,8 @@ def test_against_hf_mistral(device, dtype, block_size, use_sliding_window, windo
         n_query_groups=2,
         intermediate_size=86,
         use_sliding_window=use_sliding_window,
-        sliding_window_size=window_size
+        sliding_window_size=window_size,
+        optimise_cache_for_sliding_window = opt_cache
     )
 
     theirs_config = MistralConfig(
@@ -170,15 +191,19 @@ def test_against_hf_mistral(device, dtype, block_size, use_sliding_window, windo
 
 
 @pytest.mark.parametrize(
-   ("block_size", "use_sliding_window", "window_size"),
+   ("block_size", "use_sliding_window", "window_size", "opt_cache"),
    [
-       (32, False, None),  # basic check that the changes did not break the original behaviour.
-       (32, True, 32),  # window size equal to block and embedding size (no window size)
-       # (64, True, 32),  # block size of size n_embed*n_layer with window_size=n_embed (default mistral)
-       (32, True, 16),  # window size < n_embed (extra case)
+       (32, False, None, None),  # basic check that the changes did not break the original behaviour.
+       (32, True, 32, None),  # window size equal to block and embedding size (no window size)
+       (64, True, 32, None),  # block size of size n_embed*n_layer with window_size=n_embed (default mistral)
+       (32, True, 16, None),  # window size < n_embed (extra case)
+       (64, True, 32, True),  # introducing optimised cache (here with same length as original one)
+       (64, True, 16, True),  # try introducing optimised cache with size smaller than block size
+       (256, True, 16, True),  # as above with bigger block size
+       (256, True, 4, True),  # as above with smaller window size
    ]
 )
-def test_generate(block_size, use_sliding_window, window_size):
+def test_generate(block_size, use_sliding_window, window_size, opt_cache):
     import generate.base as generate
     from lit_gpt import GPT, Config
 
@@ -192,7 +217,8 @@ def test_generate(block_size, use_sliding_window, window_size):
         n_head=4,
         n_embd=8,
         use_sliding_window=use_sliding_window,
-        sliding_window_size=window_size
+        sliding_window_size=window_size,
+        optimise_cache_for_sliding_window=opt_cache
     )
     model = GPT(config)
     model.set_kv_cache(batch_size=1)

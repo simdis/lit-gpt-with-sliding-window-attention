@@ -12,6 +12,34 @@ that such a mechanism is used in causal models only.
 
 A new set of tests have been introduced to validate the introduction of SWA.
 
+## 2- Rolling KV-Cache
+The KV-Cache of lit-gpt will always return tensors with the maximum possible size, then the cache mask will filter out 
+all the values that are not covered by the SWA. However, in this way the benefits of SWA are lost since the
+attention will operate on the full block size (that in case of the Mistral is 32 times the SWA size). An ideal implementation
+will operate on tensors with a size equal to the sliding window's size.
+
+To do so, an extra parameter is introduced in config to enable a specific optimisation for the 
+KV cache (available only when the SWA is enabled too). This version of the KV-cache saves only the values corresponding 
+to the sliding window. 
+
+To make the implementation easier, defined as *S* the size of the sliding window, the optimised cache will have size *2S*,
+and every new value will be saved twice as follows. Defined as *p* the positional index of such new value, 
+it will be saved at indices
+*p % S* and $p % S + S$. In this way the $S$ values required by the SWA will be always in consecutive
+positions within the cache, precisely in the interval *(p % S, p % S + S]*.
+
+A specific cache mask will filter out the unneeded values.
+
+As a final note, this KV-Cache implementation does not reduce the time complexity of attention
+or the cache memory requirements that will still be
+*O(block_size^2)* and O(block_size), respectively, 
+but it will change the constant factors associated. As an example, in the case of the Mistral, block size is 32 times the 
+sliding window size, and this implementation will introduce an improvement factor of 16.
+
+### Disclaimer
+The configuration of Mistral have not been changed to reflect the newly introduced support for SWA.
+
+
 # Original README.md
 
 <div align="center">

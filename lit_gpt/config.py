@@ -63,6 +63,7 @@ class Config:
 
     use_sliding_window: bool = False
     sliding_window_size: Optional[int] = None
+    optimise_cache_for_sliding_window: Optional[bool] = None
 
     def __post_init__(self):
         if not self.name:
@@ -101,6 +102,9 @@ class Config:
             if self.sliding_window_size is None:
                 # Default to block size
                 self.sliding_window_size = self.block_size
+        if self.optimise_cache_for_sliding_window is not None and not self.use_sliding_window:
+            raise RuntimeError(f"optimise_cache_for_sliding_window parameter can be used only "
+                               f"with sliding window.")
 
     @classmethod
     def from_name(cls, name: str, **kwargs: Any) -> Self:

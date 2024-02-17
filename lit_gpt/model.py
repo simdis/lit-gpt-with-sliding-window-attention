@@ -137,7 +137,8 @@ class GPT(nn.Module):
                 self.mask_cache = build_mask_cache(
                     max_seq_length=max_seq_length,
                     device=device,
-                    window_size=self.config.sliding_window_size
+                    window_size=self.config.sliding_window_size,
+                    optimise_cache_size=self.config.optimise_cache_for_sliding_window
                 )
             else:
                 self.mask_cache = build_mask_cache(
@@ -277,6 +278,16 @@ class CausalSelfAttention(nn.Module):
                 max_seq_length,
                 rope_cache_length + self.config.head_size - self.config.rope_n_elem,
             )
+        if self.config.use_sliding_window and self.config.optimise_cache_for_sliding_window:
+            # Use optimised dummy rolling kv cache that will have a size of 2*sliding_window
+            # instead of the base KVCache with max_seq_length size for each value.
+            return DummyRollingKVCache(
+                k_shape=k_shape,
+                v_shape=v_shape,
+                window_size=self.config.sliding_window_size,
+                device=device,
+                dtype=dtype
+            )
         return KVCache(k_shape, v_shape, device=device, dtype=dtype)
 
 
@@ -391,11 +402,95 @@ class KVCache(nn.Module):
         torch.nn.init.zeros_(self.v)
 
 
+class DummyRollingKVCache(KVCache):
+    """
+    This class makes a fake rolling cache with size
+    twice as big as the sliding window and keeps a
+    rolling copy of the last sliding window tokens.
+
+    It is dummy because all the values are copied twice
+    based on input_pos % sliding window: first time at
+    input_pos % sliding_window index; second time at
+    sliding_window + input_pos % sliding_window.
+    In this way the values prior to the second copy
+    are the previous sliding_window values.
+
+    The correct output is maintained by fixing the definition
+    of the cache mask.
+    This implementation uses twice as the optimal feasible
+    memory but simplifies the computation. Besides, it avoids
+    the lit_gpt cache defined as the maximum block size, making
+    this implementation convenient when
+    2 * sliding_window_size << maximum_block_size.
+
+    An example is for Mistral model where maximum_block_size
+    is 32 times the sliding window size.
+    """
+    def __init__(
+            self,
+            k_shape: Tuple[int, int, int, int],
+            v_shape: Tuple[int, int, int, int],
+            window_size: int,
+            device: Optional[torch.device] = None,
+            dtype: Optional[torch.dtype] = None
+    ) -> None:
+        # Replace second dimension with 2 * window size
+        k_shape = (k_shape[0], k_shape[1], window_size * 2, k_shape[3])
+        v_shape = (v_shape[0], v_shape[1], window_size * 2, v_shape[3])
+        super().__init__(
+            k_shape=k_shape,
+            v_shape=v_shape,
+            device=device,
+            dtype=dtype
+        )
+        self.kv_size = window_size
+
+    def forward(self, input_pos: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Update input_pos
+        input_pos = torch.remainder(input_pos, self.kv_size)
+        # move the buffer to the activation dtype for when AMP is used
+        self.k = self.k.to(k.dtype)
+        self.v = self.v.to(v.dtype)
+
+        # Insert new values at first location
+        self.k.index_copy_(2, input_pos, k)
+        self.v.index_copy_(2, input_pos, v)
+        # Make a second copy at self.kv_size distance
+        second_input_pos = input_pos.add_(self.kv_size)
+        k = self.k.index_copy_(2, second_input_pos, k)
+        v = self.v.index_copy_(2, second_input_pos, v)
+
+        return k, v
+
+
 def build_mask_cache(
         max_seq_length: int,
         device: Optional[torch.device] = None,
-        window_size: Optional[int] = None
+        window_size: Optional[int] = None,
+        optimise_cache_size: Optional[bool] = None
 ) -> torch.Tensor:
+    if optimise_cache_size:
+        if window_size is None:
+            raise RuntimeError(f"optimise_cache_size parameter is valid only when window_size is provided.")
+        # The mask will have max_seq_length lines, but each of them with 2 * window_size length only.
+        # mask = torch.zeros((1, 1, max_seq_length, 2 * window_size), device=device, dtype=torch.bool)
+        # The first 2 * window_size lines have the standard definition, so
+        first_two_blocks = build_mask_cache(
+            max_seq_length=2 * window_size,
+            device=device,
+            window_size=window_size,
+            optimise_cache_size=False  # Disable optimisation
+        )
+        # All the remaining lines are copies of the second half of the first_two_blocks mask.
+        # Create and stack the pattern until mask has the required number of lines.
+        pattern_to_copy = first_two_blocks[:, :, window_size:, :]
+        pattern_num_copies = max_seq_length // window_size - 2  # the first 2 window size rows are in first_two_blocks
+        mask = torch.cat(
+            [first_two_blocks] + [pattern_to_copy] * pattern_num_copies,
+            dim=2
+        )
+
+        return mask
     # Base case
     mask = torch.ones((max_seq_length, max_seq_length), device=device, dtype=torch.bool)
     # Remove upper right to preserve causality
