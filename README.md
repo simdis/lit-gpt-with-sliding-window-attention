@@ -31,16 +31,17 @@ effectively acting as a rolling cache.
 To make the implementation easier, defined as *S* the size of the sliding window, the optimised cache will have size *2S*,
 and every new value will be saved twice as follows. Defined as *p* the positional index of such new value, 
 it will be saved at indices
-*p % S* and $p % S + S$. In this way the $S$ values required by the SWA will be always in consecutive
+*p % S* and *p % S + S*. In this way the *S* values required by the SWA will be always in consecutive
 positions within the cache, precisely in the interval *(p % S, p % S + S]*.
 
 A specific cache mask will filter out the unneeded values.
 
-As a final note, this KV-Cache implementation does not reduce the time complexity of attention
+As a final note, this rolling KV-Cache implementation does not reduce the time complexity of attention
 or the cache memory requirements that will still be
-*O(block_size^2)* and O(block_size), respectively, 
-but it will change the constant factors associated. As an example, in the case of the Mistral, block size is 32 times the 
-sliding window size, and this implementation will introduce an improvement factor of 16.
+*O(block_size<sup>2</sup> \* n_embd)* and O(block_size), respectively, 
+but it will change the constant factors associated. As an example, in the case of Mistral, block size is 32 times the 
+sliding window size *S* and being the rolling cache *2S*, the effective block_size used within attention will be 16
+times smaller.
 
 
 # Original README.md
