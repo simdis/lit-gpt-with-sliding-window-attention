@@ -24,7 +24,7 @@ def test_sliding_window_parameter_in_config():
 
     config = Config(use_sliding_window=True)
     assert config.use_sliding_window is True
-    assert config.sliding_window_size == config.block_size
+    assert config.sliding_window_size == config.n_embd
 
     # The following config will generate a warning.
     config = Config(sliding_window_size=1024)

@@ -100,8 +100,8 @@ class Config:
                           f"sliding_window_size {self.sliding_window_size}")
         if self.use_sliding_window:
             if self.sliding_window_size is None:
-                # Default to block size
-                self.sliding_window_size = self.block_size
+                # Default to n_embd
+                self.sliding_window_size = self.n_embd
         if self.optimise_cache_for_sliding_window is not None and not self.use_sliding_window:
             raise RuntimeError(f"optimise_cache_for_sliding_window parameter can be used only "
                                f"with sliding window.")
