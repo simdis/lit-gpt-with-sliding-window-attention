@@ -15,6 +15,21 @@ A new set of tests have been introduced to validate the introduction of SWA.
 ### Disclaimer
 The configuration of Mistral within this repo have not been changed to reflect the newly introduced support for SWA.
 
+An example on how to instantiate a Mistral model with SWA enabled follows (please refer to the lit-gpt tutorials for
+details about downloading and using model weights checkpoints).
+```python3
+from lit_gpt import GPT, Config
+
+config = Config.from_name(
+    "Mistral-7B-Instruct-v0.1",  # Mistral checkpoint name
+    block_size=32768,  # without SWA is constrained to 4096
+    use_sliding_window=True,  # enable SWA
+    sliding_window_size=4096
+)
+
+mistral = GPT(config)
+```
+
 ## 2- Rolling KV-Cache
 The KV-Cache of lit-gpt will always return tensors with the maximum possible size, then the cache mask will filter out 
 all the values that are not covered by the SWA. However, in this way the benefits of SWA are lost since the
