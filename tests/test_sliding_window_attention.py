@@ -69,7 +69,11 @@ def test_sliding_window_parameter_in_config():
                          [False, True, True, True, False, False],
                          [False, False, True, True, True, False],
                          [False, False, False, True, True, True]]]])
-         )  # use of sliding window
+         ),  # use of sliding window and optimised cache
+        pytest.param(
+            12, None, True, None,
+            marks=pytest.mark.xfail(raises=RuntimeError, strict=True)
+        )  # check runtime error for optimisation without sliding window
     ],
 )
 def test_causal_mask_generation(
@@ -190,6 +194,7 @@ def test_against_hf_mistral(device, dtype, block_size, use_sliding_window, windo
     torch.testing.assert_close(ours_y, theirs_y)
 
 
+@torch.inference_mode()
 @pytest.mark.parametrize(
    ("block_size", "use_sliding_window", "window_size", "opt_cache"),
    [
@@ -239,3 +244,55 @@ def test_generate(block_size, use_sliding_window, window_size, opt_cache):
     expected = torch.cat((input_idx, multinomial_results))
     assert out.shape == expected.shape
     torch.testing.assert_close(out, expected)
+
+
+@torch.inference_mode()
+@pytest.mark.parametrize(
+    ("max_seq_length", "optimised_cache", "window_size"),
+    [
+        pytest.param(13, False, None, marks=pytest.mark.xfail(raises=IndexError, strict=True)),
+        (25, False, None),  # no cache, no window size (old base behaviour)
+        (25, False, 5),  # add window size
+        (25, True, None),  # add optimised cache with no window
+        (25, True, 5),  # add rolling cache and window size
+    ]
+)
+def test_kv_cache(max_seq_length, optimised_cache, window_size):
+    from lit_gpt import GPT, Config
+
+    config = Config(
+        block_size=25,
+        padded_vocab_size=5,
+        n_layer=2,
+        n_head=2,
+        n_embd=8,
+        use_sliding_window=True,
+        sliding_window_size=window_size,
+        optimise_cache_for_sliding_window=True if optimised_cache else None
+    )
+    model = GPT(config)
+    idx = torch.randint(0, model.config.padded_vocab_size, (1, 5))
+    max_new_tokens = 20
+    model.max_seq_length = max_seq_length
+    model.set_kv_cache(1)
+
+    def generate(logits):
+        logits = logits[:, -1:]
+        probs = torch.nn.functional.softmax(logits, dim=-1)
+        return torch.argmax(probs).unsqueeze(0).unsqueeze(0)
+
+    x_no_cache = idx
+    x_cache = idx
+    input_pos = torch.arange(0, 5)
+    for _ in range(max_new_tokens):
+        logits_no_cache = model(x_no_cache[:, -max_seq_length:])
+        out_no_cache = generate(logits_no_cache)
+
+        logits_cache = model(x_cache, input_pos)
+        out_cache = generate(logits_cache)
+
+        torch.testing.assert_close(out_no_cache, out_cache, rtol=0, atol=0)
+
+        x_no_cache = torch.cat((x_no_cache, out_no_cache), dim=1)
+        x_cache = out_cache
+        input_pos = input_pos[-1:] + 1
